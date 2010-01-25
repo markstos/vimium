@@ -5,7 +5,7 @@
  * commands by connectiong to a port named "domReady".
  */
 var settings = {};
-var settingsToLoad = ["scrollStepSize"];
+var settingsToLoad = ["scrollStepSize", "linkHintCharacters"];
 
 var getCurrentUrlHandlers = []; // function(url)
 
@@ -22,6 +22,7 @@ var isEnabledForUrl = true;
 // The user's operating system.
 var platform;
 var currentCompletionKeys;
+var linkHintCss;
 
 // TODO(philc): This should be pulled from the extension's storage when the page loads.
 var currentZoomLevel = 100;
@@ -64,6 +65,10 @@ function initializePreDomReady() {
 
   var getZoomLevelPort = chrome.extension.connect({ name: "getZoomLevel" });
   getZoomLevelPort.postMessage({ domain: window.location.host });
+
+  chrome.extension.sendRequest({handler: "getLinkHintCss"}, function (response) {
+    linkHintCss = response.linkHintCss;
+  });
 
   refreshCompletionKeys();
 
@@ -154,11 +159,7 @@ function initializeOnDomReady() {
  */
 function enterInsertModeIfElementIsFocused() {
   // Enter insert mode automatically if there's already a text box focused.
-  // TODO(philc): Consider using document.activeElement here instead.
-  var focusNode = window.getSelection().focusNode;
-  var focusOffset = window.getSelection().focusOffset;
-  if (focusNode && focusOffset && focusNode.children.length > focusOffset &&
-      isInputOrText(focusNode.children[focusOffset]))
+  if (document.activeElement && isEditable(document.activeElement))
     enterInsertMode();
 }
 
@@ -190,7 +191,7 @@ function zoomIn() {
 
 function zoomOut() {
   setPageZoomLevel(currentZoomLevel -= 20, true);
-  saveZoomLevel(window.location.host, currentZoomLevel, showUINotification);
+  saveZoomLevel(window.location.host, currentZoomLevel);
 }
 
 function scrollToBottom() { window.scrollTo(0, document.body.scrollHeight); }
@@ -229,6 +230,28 @@ function toggleViewSourceCallback(url) {
   else { window.location.href = "view-source:" + url; }
 }
 
+function getKeyChar(event) {
+    var keyIdentifier = event.keyIdentifier;
+    // On Windows, the keyIdentifiers for non-letter keys are incorrect. See
+    // https://bugs.webkit.org/show_bug.cgi?id=19906 for more details.
+    if (platform == "Windows" || platform == "Linux")
+      keyIdentifier = keyIdentifierCorrectionMap[keyIdentifier] || keyIdentifier;
+    unicodeKeyInHex = "0x" + keyIdentifier.substring(2);
+    return String.fromCharCode(parseInt(unicodeKeyInHex)).toLowerCase();
+}
+
+function isPrimaryModifierKey(event) {
+  if (platform == "Mac")
+    return event.metaKey;
+  else
+    return event.ctrlKey;
+}
+
+function isEscape(event) {
+  return event.keyCode == keyCodes.ESC ||
+    (event.ctrlKey && getKeyChar(event) == '['); // c-[ is mapped to ESC in Vim by default.
+}
+
 /**
  * Sends everything except i & ESC to the handler in background_page. i & ESC are special because they control
  * insert mode which is local state to the page. The key will be are either a single ascii letter or a
@@ -244,17 +267,10 @@ function onKeydown(event) {
 
   // Ignore modifier keys by themselves.
   if (event.keyCode > 31) {
-    var keyIdentifier = event.keyIdentifier;
-    // On Windows, the keyIdentifiers for non-letter keys are incorrect. See
-    // https://bugs.webkit.org/show_bug.cgi?id=19906 for more details.
-    if (platform == "Windows" || platform == "Linux")
-      keyIdentifier = keyIdentifierCorrectionMap[keyIdentifier] || keyIdentifier;
-    unicodeKeyInHex = "0x" + keyIdentifier.substring(2);
-    keyChar = String.fromCharCode(parseInt(unicodeKeyInHex)).toLowerCase();
+    keyChar = getKeyChar(event);
 
     // Enter insert mode when the user enables the native find interface.
-    if (keyChar == "f" && !event.shiftKey && ((platform == "Mac" && event.metaKey) ||
-                                              (platform != "Mac" && event.ctrlKey)))
+    if (keyChar == "f" && !event.shiftKey && isPrimaryModifierKey(event))
     {
       enterInsertMode();
       return;
@@ -268,18 +284,18 @@ function onKeydown(event) {
       keyChar = null;
   }
 
-  if (insertMode && event.keyCode == keyCodes.ESC)
+  if (insertMode && isEscape(event))
   {
     // Note that we can't programmatically blur out of Flash embeds from Javascript.
-    if (event.srcElement.tagName != "EMBED") {
+    if (!isEmbed(event.srcElement)) {
       // Remove focus so the user can't just get himself back into insert mode by typing in the same input box.
-      if (isInputOrText(event.srcElement)) { event.srcElement.blur(); }
+      if (isEditable(event.srcElement)) { event.srcElement.blur(); }
       exitInsertMode();
     }
   }
   else if (findMode)
   {
-    if (event.keyCode == keyCodes.ESC)
+    if (isEscape(event))
       exitFindMode();
     else if (keyChar)
     {
@@ -307,7 +323,7 @@ function onKeydown(event) {
 
       keyPort.postMessage(keyChar);
     }
-    else if (event.keyCode == keyCodes.ESC) {
+    else if (isEscape(event)) {
       keyPort.postMessage("<ESC>");
     }
   }
@@ -335,15 +351,24 @@ function onBlurCapturePhase(event) {
 /*
  * Returns true if the element is focusable. This includes embeds like Flash, which steal the keybaord focus.
  */
-function isFocusable(element) { return isInputOrText(element) || element.tagName == "EMBED"; }
+function isFocusable(element) { return isEditable(element) || isEmbed(element); }
+
+/*
+ * Embedded elements like Flash and quicktime players can obtain focus but cannot be programmatically
+ * unfocused.
+ */
+function isEmbed(element) { return ["EMBED", "OBJECT"].indexOf(element.tagName) > 0; }
 
 /*
  * Input or text elements are considered focusable and able to receieve their own keyboard events,
- * and will enter enter mode if focused.
+ * and will enter enter mode if focused. Also note that the "contentEditable" attribute can be set on
+ * any element which makes it a rich text editor, like the notes on jjot.com.
  * Note: we used to discriminate for text-only inputs, but this is not accurate since all input fields
  * can be controlled via the keyboard, particuarlly SELECT combo boxes.
  */
-function isInputOrText(target) {
+function isEditable(target) {
+  if (target.getAttribute("contentEditable") == "true")
+    return true;
   var focusableInputs = ["input", "textarea", "select", "button"];
   return focusableInputs.indexOf(target.tagName.toLowerCase()) >= 0;
 }
@@ -498,6 +523,7 @@ HUD = {
         opacity = 0;
       }
 
+      element.className = "vimiumHUD";
       document.body.appendChild(element);
       HUD._displayElement = element
       HUD.updatePageZoomLevel(currentZoomLevel);

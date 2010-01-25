@@ -2,27 +2,12 @@
  * This implements link hinting. Typing "F" will enter link-hinting mode, where all clickable items on
  * the page have a hint marker displayed containing a sequence of letters. Typing those letters will select
  * a link.
+ *
+ * The characters we use to show link hints are a user-configurable option. By default they're the home row.
+ * The CSS which is used on the link hints is also a configurable option.
  */
-var linkHintsCss =
-  '.vimiumHintMarker {' +
-    'background-color:yellow;' +
-    'color:black;' +
-    'font-weight:bold;' +
-    'font-size:12px;' +
-    'padding:0 1px;' +
-    'line-height:100%;' +
-    'width:auto;' +
-    'display:block;' +
-    'border:1px solid #E3BE23;' +
-    'z-index:99999999;' +
-    'font-family:"Helvetica Neue", "Helvetica", "Arial", "Sans";' +
-  '}' +
-  '.vimiumHintMarker > span.matchingCharacter {' +
-    'color:#C79F0B;' +
-  '}';
 
 var hintMarkers = [];
-var hintCharacters = "sadfjklewcmp";
 // The characters that were typed in while in "link hints" mode.
 var hintKeystrokeQueue = [];
 var linkHintsModeActivated = false;
@@ -39,7 +24,8 @@ function activateLinkHintsModeToOpenInNewTab() { activateLinkHintsMode(true); }
 
 function activateLinkHintsMode(openInNewTab) {
   if (!linkHintsCssAdded)
-    addCssToPage(linkHintsCss);
+    addCssToPage(linkHintCss); // linkHintCss is declared by vimiumFrontend.js
+  linkHintCssAdded = true;
   linkHintsModeActivated = true;
   shouldOpenLinkHintInNewTab = openInNewTab
   buildLinkHints();
@@ -54,7 +40,7 @@ function buildLinkHints() {
 
   // Initialize the number used to generate the character hints to be as many digits as we need to
   // highlight all the links on the page; we don't want some link hints to have more chars than others.
-  var digitsNeeded = Math.ceil(logXOfBase(visibleElements.length, hintCharacters.length));
+  var digitsNeeded = Math.ceil(logXOfBase(visibleElements.length, settings.linkHintCharacters.length));
   var linkHintNumber = 0;
   for (var i = 0; i < visibleElements.length; i++) {
     hintMarkers.push(addMarkerFor(visibleElements[i], linkHintNumber, digitsNeeded));
@@ -139,7 +125,7 @@ function onKeyDownInLinkHintsMode(event) {
       hintKeystrokeQueue.pop();
       updateLinkHints();
     }
-  } else if (hintCharacters.indexOf(keyChar) >= 0) {
+  } else if (settings.linkHintCharacters.indexOf(keyChar) >= 0) {
     hintKeystrokeQueue.push(keyChar);
     updateLinkHints();
   } else {
@@ -213,12 +199,12 @@ function highlightLinkMatches(searchString) {
  * the hint text. The hint string will be "padded with zeroes" to ensure its length is equal to numHintDigits.
  */
 function numberToHintString(number, numHintDigits) {
-  var base = hintCharacters.length;
+  var base = settings.linkHintCharacters.length;
   var hintString = [];
   var remainder = 0;
   do {
     remainder = number % base;
-    hintString.unshift(hintCharacters[remainder]);
+    hintString.unshift(settings.linkHintCharacters[remainder]);
     number -= remainder;
     number /= Math.floor(base);
   } while (number > 0);
@@ -226,7 +212,7 @@ function numberToHintString(number, numHintDigits) {
   // Pad the hint string we're returning so that it matches numHintDigits.
   var hintStringLength = hintString.length;
   for (var i = 0; i < numHintDigits - hintStringLength; i++)
-    hintString.unshift(hintCharacters[0]);
+    hintString.unshift(settings.linkHintCharacters[0]);
   return hintString.join("");
 }
 
@@ -259,7 +245,7 @@ function deactivateLinkHintsMode() {
 function addMarkerFor(link, linkHintNumber, linkHintDigits) {
   var hintString = numberToHintString(linkHintNumber, linkHintDigits);
   var marker = document.createElement("div");
-  marker.className = "vimiumHintMarker";
+  marker.className = "internalVimiumHintMarker vimiumHintMarker";
   var innerHTML = [];
   // Make each hint character a span, so that we can highlight the typed characters as you type them.
   for (var i = 0; i < hintString.length; i++)
