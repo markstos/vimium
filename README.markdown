@@ -29,8 +29,6 @@ Navigating the current page:
     l       scroll right
     gg      scroll to top of the page
     G       scroll to bottom of the page
-    <c-d>   scroll down a page
-    <c-u>   scroll up a page
     f       activate link hints mode to open in current page
     F       activate link hints mode to open in new tab
     r       reload
