@@ -29,9 +29,17 @@ Navigating the current page:
     l       scroll right
     gg      scroll to top of the page
     G       scroll to bottom of the page
+<<<<<<< HEAD:README.markdown
     <c-e>   scroll down a page
     <c-y>   scroll up a page
     f       activate link hints mode to open in current page
+=======
+    <c-d>, <c-e>   scroll down a page
+    <c-u>, <c-y>   scroll up a page
+    <c-f>   scroll down a full page
+    <c-b>   scroll up a full page
+    f       activate link hints mode to open in current tab
+>>>>>>> a02edd4ddda10f8a834577be92cb41d5cb6defe8:README.markdown
     F       activate link hints mode to open in new tab
     r       reload
     gf      view source
@@ -67,9 +75,12 @@ include a change to the CREDITS file with your patch.
 Release Notes
 -------------
 
-1.15 (unreleased)
+1.15 (01/31/2010)
 
 -  Make the CSS used by the link hints configurable. It's under Advanced Options.
+-  Add a notification linking to the changelog when Vimium is updated in the background.
+-  Link-hinting performance improvements and bugfixes.
+-  Ctrl+D and Ctrl+U now scroll by 1/2 page instead of a fixed amount, to mirror Vim's behavior.
 
 1.14 (01/21/2010)
 

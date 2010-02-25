@@ -82,6 +82,14 @@ function initializePreDomReady() {
   else
     platform = "Windows";
 
+  chrome.extension.onRequest.addListener(function(request, sender, sendResponse) {
+    if (request.name == "hideUpgradeNotification")
+      HUD.hideUpgradeNotification();
+    else if (request.name == "showUpgradeNotification" && isEnabledForUrl)
+      HUD.showUpgradeNotification(request.version);
+    sendResponse({}); // Free up the resources used by this open connection.
+  });
+
   chrome.extension.onConnect.addListener(function(port, name) {
     if (port.name == "executePageCommand") {
       port.onMessage.addListener(function(args) {
@@ -150,6 +158,7 @@ function initializeWhenEnabled() {
 function initializeOnDomReady() {
   if (isEnabledForUrl)
     enterInsertModeIfElementIsFocused();
+
   // Tell the background page we're in the dom ready state.
   chrome.extension.connect({ name: "domReady" });
 };
@@ -198,8 +207,10 @@ function scrollToBottom() { window.scrollTo(0, document.body.scrollHeight); }
 function scrollToTop() { window.scrollTo(0, 0); }
 function scrollUp() { window.scrollBy(0, -1 * settings["scrollStepSize"]); }
 function scrollDown() { window.scrollBy(0, settings["scrollStepSize"]); }
-function scrollPageUp() { window.scrollBy(0, -6 * settings["scrollStepSize"]); }
-function scrollPageDown() { window.scrollBy(0, 6 * settings["scrollStepSize"]); }
+function scrollPageUp() { window.scrollBy(0, -1 * window.innerHeight / 2); }
+function scrollPageDown() { window.scrollBy(0, window.innerHeight / 2); }
+function scrollFullPageUp() { window.scrollBy(0, -window.innerHeight); }
+function scrollFullPageDown() { window.scrollBy(0, window.innerHeight); }
 function scrollLeft() { window.scrollBy(-1 * settings["scrollStepSize"], 0); }
 function scrollRight() { window.scrollBy(settings["scrollStepSize"], 0); }
 
@@ -467,11 +478,55 @@ function exitFindMode() {
 }
 
 /*
- * A heads-up-display for showing Vimium page operations.
+ * A heads-up-display (HUD) for showing Vimium page operations.
  * Note: you cannot interact with the HUD until document.body is available.
  */
 HUD = {
   _tweenId: -1,
+  _displayElement: null,
+  _upgradeNotificationElement: null,
+
+  // This HUD is styled to precisely mimick the chrome HUD on Mac. Use the "has_popup_and_link_hud.html"
+  // test harness to tweak these styles to match Chrome's. One limitation of our HUD display is that
+  // it doesn't sit on top of horizontal scrollbars like Chrome's HUD does.
+  _hudCss:
+    ".vimiumHUD {" +
+      "position: fixed;" +
+      "bottom: 0px;" +
+      "color: black;" +
+      "height: 13px;" +
+      "max-width: 400px;" +
+      "min-width: 150px;" +
+      "text-align: left;" +
+      "background-color: #ebebeb;" +
+      "font-weight: normal;" +
+      "font-size: 11px;" +
+      "padding: 3px 3px 2px 3px;" +
+      "border: 1px solid #b3b3b3;" +
+      "border-radius: 4px 4px 0 0;" +
+      "font-family: Lucida Grande, Arial, Sans;" +
+      // One less than vimium's hint markers, so link hints can be shown e.g. for the panel's close button.
+      "z-index: 99999998;" +
+      "text-shadow: 0px 1px 2px #FFF;" +
+      "line-height: 1.0;" +
+      "opacity: 0;" +
+    "}" +
+    ".vimiumHUD a, .vimiumHUD a:hover { background-color: transparent; color: blue; }" +
+    ".vimiumHUD .close-button {" +
+      "font-family:courier new;" +
+      "font-weight:bold;" +
+      "color:#9C9A9A;" +
+      "text-decoration:none;" +
+      "padding-left:10px;" +
+      "font-size:14px;" +
+    "}" +
+    ".vimiumHUD .close-button:hover {" +
+      "color:#333333;" +
+      "cursor:default;" +
+      "-webkit-user-select:none;" +
+    "}",
+
+  _cssHasBeenAdded: false,
 
   showForDuration: function(text, duration) {
     HUD.show(text);
@@ -486,55 +541,76 @@ HUD = {
     HUD.displayElement().style.display = "";
   },
 
+  showUpgradeNotification: function(version) {
+    HUD.upgradeNotificationElement().innerHTML = "Vimium has been updated to " +
+      "<a href='https://chrome.google.com/extensions/detail/dbepggeogbaibhgnhhndojpepiihcmeb'>" +
+      version + "</a>.<a class='close-button' href='#'>x</a>";
+    var links = HUD.upgradeNotificationElement().getElementsByTagName("a");
+    links[0].addEventListener("click", HUD.onUpdateLinkClicked, false);
+    links[1].addEventListener("click", function(event) {
+      event.preventDefault();
+      HUD.onUpdateLinkClicked();
+    });
+    Tween.fade(HUD.upgradeNotificationElement(), 1.0, 150);
+  },
+
+  onUpdateLinkClicked: function(event) {
+    HUD.hideUpgradeNotification();
+    chrome.extension.sendRequest({ handler: "upgradeNotificationClosed" });
+  },
+
+  hideUpgradeNotification: function(clickEvent) {
+    Tween.fade(HUD.upgradeNotificationElement(), 0, 150,
+      function() { HUD.upgradeNotificationElement().style.display = "none"; });
+  },
+
   updatePageZoomLevel: function(pageZoomLevel) {
     // Since the chrome HUD does not scale with the page's zoom level, neither will this HUD.
-    HUD.displayElement().style.zoom = (100.0 / pageZoomLevel) * 100 + "%";
+    var inverseZoomLevel = (100.0 / pageZoomLevel) * 100;
+    if (HUD._displayElement)
+      HUD.displayElement().style.zoom = inverseZoomLevel + "%";
+    if (HUD._upgradeNotificationElement)
+      HUD.upgradeNotificationElement().style.zoom = inverseZoomLevel + "%";
   },
 
   /*
-   * Retrieves the HUD HTML element, creating it if necessary.
+   * Retrieves the HUD HTML element.
    */
   displayElement: function() {
     if (!HUD._displayElement) {
-      // This is styled to precisely mimick the chrome HUD. Use the "has_popup_and_link_hud.html" test harness
-      // to tweak these styles to match Chrome's. One limitation of our HUD display is that it doesn't sit
-      // on top of horizontal scrollbars like Chrome's HUD does.
-      var element = document.createElement("div");
-      with (element.style) {
-        position = "fixed";
-        bottom = "0px";
-        color = "black";
-        // Keep this far enough to the right so that it doesn't collide with the "popups blocked" chrome HUD.
-        right = "150px";
-        height = "13px";
-        maxWidth = "400px";
-        minWidth = "150px";
-        textAlign = "left";
-        backgroundColor = "#ebebeb";
-        fontWieght = "normal";
-        fontSize = "11px";
-        padding = "3px 3px 2px 3px";
-        border = "1px solid #b3b3b3";
-        borderRadius = "4px 4px 0 0";
-        fontFamily = "Lucida Grande, Arial, Sans";
-        zIndex = 99999999999;
-        textShadow = "0px 1px 2px #FFF";
-        lineHeight = "1.0";
-        opacity = 0;
-      }
-
-      element.className = "vimiumHUD";
-      document.body.appendChild(element);
-      HUD._displayElement = element
+      HUD._displayElement = HUD.createHudElement();
+      // Keep this far enough to the right so that it doesn't collide with the "popups blocked" chrome HUD.
+      HUD._displayElement.style.right = "150px";
       HUD.updatePageZoomLevel(currentZoomLevel);
     }
     return HUD._displayElement;
   },
 
+  upgradeNotificationElement: function() {
+    if (!HUD._upgradeNotificationElement) {
+      HUD._upgradeNotificationElement = HUD.createHudElement();
+      // Position this just to the left of our normal HUD.
+      HUD._upgradeNotificationElement.style.right = "315px";
+      HUD.updatePageZoomLevel(currentZoomLevel);
+    }
+    return HUD._upgradeNotificationElement;
+  },
+
+  createHudElement: function() {
+    if (!HUD._cssHasBeenAdded) {
+      addCssToPage(HUD._hudCss);
+      HUD._cssHasBeenAdded = true;
+    }
+    var element = document.createElement("div");
+    element.className = "vimiumHUD";
+    document.body.appendChild(element);
+    return element;
+  },
+
   hide: function() {
     clearInterval(HUD._tweenId);
     HUD._tweenId = Tween.fade(HUD.displayElement(), 0, 150,
-      function() { HUD.displayElement().display == "none"; });
+      function() { HUD.displayElement().style.display = "none"; });
   },
 
   isReady: function() { return document.body != null; }
@@ -570,6 +646,21 @@ Tween = {
     }
   }
 };
+
+/*
+ * Adds the given CSS to the page.
+ */
+function addCssToPage(css) {
+  var head = document.getElementsByTagName("head")[0];
+  if (!head) {
+    console.log("Warning: unable to add CSS to the page.");
+    return;
+  }
+  var style = document.createElement("style");
+  style.type = "text/css";
+  style.appendChild(document.createTextNode(css));
+  head.appendChild(style);
+}
 
 // Prevent our content script from being run on iframes -- only allow it to run on the top level DOM "window".
 // TODO(philc): We don't want to process multiple keyhandlers etc. when embedded on a page containing IFrames.
